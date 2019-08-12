@@ -1,6 +1,6 @@
 package main
 
-import amf "./_obj/amf"
+import "github.com/erichummel/amf.go"
 
 func main() {
 	amf.ServeHttp()

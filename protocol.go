@@ -3,18 +3,10 @@ package amf
 import (
 	"encoding/binary"
 	"fmt"
-	"os"
+	"io"
 	"reflect"
 	"strings"
 )
-
-type Reader interface {
-	Read(p []byte) (n int, err os.Error)
-}
-
-type Writer interface {
-	Write(p []byte) (n int, err os.Error)
-}
 
 type AvmObject struct {
 	class         *AvmClass
@@ -39,7 +31,7 @@ type AvmArray struct {
 // * Public functions *
 
 // Read an AMF3 value from the stream.
-func ReadValueAmf3(stream Reader) (interface{}, os.Error) {
+func ReadValueAmf3(stream io.Reader) (interface{}, error) {
 	cxt := &Decoder{}
 	cxt.AmfVersion = 3
 	cxt.stream = stream
@@ -47,7 +39,7 @@ func ReadValueAmf3(stream Reader) (interface{}, os.Error) {
 	return result, cxt.decodeError
 }
 
-func WriteValueAmf3(stream Writer, value interface{}) os.Error {
+func WriteValueAmf3(stream io.Writer, value interface{}) error {
 	cxt := &Encoder{}
 	cxt.stream = stream
 	return cxt.WriteValueAmf3(value)
@@ -90,7 +82,7 @@ const (
 )
 
 type Decoder struct {
-	stream Reader
+	stream io.Reader
 
 	AmfVersion uint16
 
@@ -100,14 +92,14 @@ type Decoder struct {
 	classTable  []*AvmClass
 	objectTable []interface{}
 
-	decodeError os.Error
+	decodeError error
 
 	// When unpacking objects, we'll look in this map for the type name. If found,
 	// we'll unpack the value into an instance of the associated type.
 	typeMap map[string]reflect.Type
 }
 
-func NewDecoder(stream Reader, amfVersion uint16) *Decoder {
+func NewDecoder(stream io.Reader, amfVersion uint16) *Decoder {
 	decoder := &Decoder{}
 	decoder.stream = stream
 	decoder.AmfVersion = amfVersion
@@ -118,7 +110,7 @@ func NewDecoder(stream Reader, amfVersion uint16) *Decoder {
 func (cxt *Decoder) useAmf3() bool {
 	return cxt.AmfVersion == 3
 }
-func (cxt *Decoder) saveError(err os.Error) {
+func (cxt *Decoder) saveError(err error) {
 	if err == nil {
 		return
 	}
@@ -169,7 +161,7 @@ func (cxt *Decoder) ReadFloat64() float64 {
 	cxt.saveError(err)
 	return value
 }
-func (cxt *Encoder) WriteFloat64(value float64) os.Error {
+func (cxt *Encoder) WriteFloat64(value float64) error {
 	return binary.Write(cxt.stream, binary.BigEndian, &value)
 }
 func (cxt *Decoder) ReadString() string {
@@ -184,8 +176,8 @@ func (cxt *Decoder) ReadStringKnownLength(length int) string {
 	data := make([]byte, length)
 	n, err := cxt.stream.Read(data)
 	if n < length {
-		cxt.saveError(os.NewError(fmt.Sprintf(
-			"Not enough bytes in ReadStringKnownLength (expected %d, found %d)", length, n)))
+		cxt.saveError(fmt.Errorf(
+			"not enough bytes in ReadStringKnownLength (expected %d, found %d)", length, n))
 		return ""
 	}
 	cxt.saveError(err)
@@ -193,25 +185,25 @@ func (cxt *Decoder) ReadStringKnownLength(length int) string {
 }
 
 type Encoder struct {
-	stream Writer
+	stream io.Writer
 }
 
-func NewEncoder(stream Writer) *Encoder {
+func NewEncoder(stream io.Writer) *Encoder {
 	return &Encoder{stream}
 }
-func (cxt *Encoder) WriteUint16(value uint16) os.Error {
+func (cxt *Encoder) WriteUint16(value uint16) error {
 	return binary.Write(cxt.stream, binary.BigEndian, &value)
 }
-func (cxt *Encoder) WriteUint32(value uint32) os.Error {
+func (cxt *Encoder) WriteUint32(value uint32) error {
 	return binary.Write(cxt.stream, binary.BigEndian, &value)
 }
 
-func (cxt *Encoder) WriteString(str string) os.Error {
+func (cxt *Encoder) WriteString(str string) error {
 	binary.Write(cxt.stream, binary.BigEndian, uint16(len(str)))
 	_, err := cxt.stream.Write([]byte(str))
 	return err
 }
-func (cxt *Encoder) writeByte(b uint8) os.Error {
+func (cxt *Encoder) writeByte(b uint8) error {
 	return binary.Write(cxt.stream, binary.BigEndian, b)
 }
 func (cxt *Encoder) WriteBool(b bool) {
@@ -221,7 +213,6 @@ func (cxt *Encoder) WriteBool(b bool) {
 	}
 	binary.Write(cxt.stream, binary.BigEndian, uint8(val))
 }
-
 
 // Read a 29-bit compact encoded integer (as defined in AVM3)
 func (cxt *Decoder) ReadUint29() uint32 {
@@ -247,7 +238,7 @@ func (cxt *Decoder) ReadUint29() uint32 {
 	return result
 }
 
-func (cxt *Encoder) WriteUint29(value uint32) os.Error {
+func (cxt *Encoder) WriteUint29(value uint32) error {
 
 	// Make sure the value is only 29 bits.
 	remainder := value & 0x1fffffff
@@ -285,7 +276,7 @@ func (cxt *Decoder) readStringAmf3() string {
 	if (ref & 1) == 0 {
 		index := int(ref >> 1)
 		if index >= len(cxt.stringTable) {
-			cxt.saveError(os.NewError(fmt.Sprintf("Invalid string index: %d", index)))
+			cxt.saveError(fmt.Errorf("invalid string index: %d", index))
 			return ""
 		}
 
@@ -304,7 +295,7 @@ func (cxt *Decoder) readStringAmf3() string {
 	return str
 }
 
-func (cxt *Encoder) WriteStringAmf3(s string) os.Error {
+func (cxt *Encoder) WriteStringAmf3(s string) error {
 	length := len(s)
 
 	// TODO: Support outgoing string references.
@@ -328,7 +319,7 @@ func (cxt *Decoder) readObjectAmf3() interface{} {
 	if (ref & 1) == 0 {
 		index := int(ref >> 1)
 		if index >= len(cxt.objectTable) {
-			cxt.saveError(os.NewError(fmt.Sprintf("Invalid object index: %d", index)))
+			cxt.saveError(fmt.Errorf("invalid object index: %d", index))
 			return nil
 		}
 		return cxt.objectTable[index]
@@ -411,7 +402,7 @@ func (cxt *Decoder) readObjectAmf3() interface{} {
 	return object
 }
 
-func (cxt *Encoder) writeObjectAmf3(value interface{}) os.Error {
+func (cxt *Encoder) writeObjectAmf3(value interface{}) error {
 
 	fmt.Printf("writeObjectAmf3 attempting to write a value of type %s\n",
 		reflect.ValueOf(value).Type().Name())
@@ -419,7 +410,7 @@ func (cxt *Encoder) writeObjectAmf3(value interface{}) os.Error {
 	return nil
 }
 
-func (cxt *Encoder) writeAvmObject3(value *AvmObject) os.Error {
+func (cxt *Encoder) writeAvmObject3(value *AvmObject) error {
 	// TODO: Support outgoing object references.
 
 	// writeClassDefinitionAmf3 will also write the ref section.
@@ -428,10 +419,10 @@ func (cxt *Encoder) writeAvmObject3(value *AvmObject) os.Error {
 	return nil
 }
 
-func (cxt *Encoder) writeReflectedStructAmf3(value reflect.Value) os.Error {
+func (cxt *Encoder) writeReflectedStructAmf3(value reflect.Value) error {
 
 	if value.Kind() != reflect.Struct {
-		return os.NewError("writeReflectedStructAmf3 called with non-struct value")
+		return fmt.Errorf("writeReflectedStructAmf3 called with non-struct value")
 	}
 
 	// Ref is, non-object-ref, non-class-ref, non-externalizable, non-dynamic
@@ -525,7 +516,7 @@ func (cxt *Decoder) readArrayAmf3() interface{} {
 	if (ref & 1) == 0 {
 		index := int(ref >> 1)
 		if index >= len(cxt.objectTable) {
-			cxt.saveError(os.NewError(fmt.Sprintf("Invalid array reference: %d", index)))
+			cxt.saveError(fmt.Errorf("invalid array reference: %d", index))
 			return nil
 		}
 
@@ -566,7 +557,7 @@ func (cxt *Decoder) readArrayAmf3() interface{} {
 	return result
 }
 
-func (cxt *Encoder) writeReflectedArrayAmf3(value reflect.Value) os.Error {
+func (cxt *Encoder) writeReflectedArrayAmf3(value reflect.Value) error {
 
 	elementCount := value.Len()
 
@@ -584,7 +575,7 @@ func (cxt *Encoder) writeReflectedArrayAmf3(value reflect.Value) os.Error {
 	return nil
 }
 
-func (cxt *Encoder) writeFlatArrayAmf3(value []interface{}) os.Error {
+func (cxt *Encoder) writeFlatArrayAmf3(value []interface{}) error {
 	elementCount := len(value)
 
 	// TODO: Support outgoing array references
@@ -602,7 +593,7 @@ func (cxt *Encoder) writeFlatArrayAmf3(value []interface{}) os.Error {
 	return nil
 }
 
-func (cxt *Encoder) writeMixedArray3(value *AvmArray) os.Error {
+func (cxt *Encoder) writeMixedArray3(value *AvmArray) error {
 	elementCount := len(value.elements)
 
 	// TODO: Support outgoing array references
@@ -735,11 +726,11 @@ func (cxt *Decoder) ReadValueAmf3() interface{} {
 		return cxt.readArrayAmf3()
 	}
 
-	cxt.saveError(os.NewError("AMF3 type marker was not supported"))
+	cxt.saveError(fmt.Errorf("AMF3 type marker was not supported"))
 	return nil
 }
 
-func (cxt *Encoder) WriteValueAmf3(value interface{}) os.Error {
+func (cxt *Encoder) WriteValueAmf3(value interface{}) error {
 
 	if value == nil {
 		return cxt.writeByte(amf3_nullType)
@@ -748,7 +739,7 @@ func (cxt *Encoder) WriteValueAmf3(value interface{}) os.Error {
 	return cxt.writeReflectedValueAmf3(reflect.ValueOf(value))
 }
 
-func (cxt *Encoder) writeReflectedValueAmf3(value reflect.Value) os.Error {
+func (cxt *Encoder) writeReflectedValueAmf3(value reflect.Value) error {
 
 	switch value.Kind() {
 	case reflect.String:
@@ -775,6 +766,6 @@ func (cxt *Encoder) writeReflectedValueAmf3(value reflect.Value) os.Error {
 		return cxt.writeReflectedArrayAmf3(value)
 	}
 
-	return os.NewError(fmt.Sprintf("writeReflectedArrayAmf3 doesn't support kind: %v",
-		value.Kind().String()))
+	return fmt.Errorf("writeReflectedArrayAmf3 doesn't support kind: %v",
+		value.Kind().String())
 }

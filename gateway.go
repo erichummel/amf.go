@@ -1,10 +1,10 @@
 package amf
 
 import (
-    "bytes"
-    "fmt"
-    "http"
-    "strconv"
+	"bytes"
+	"fmt"
+	"net/http"
+	"strconv"
 )
 
 func handleGet(w http.ResponseWriter) {
